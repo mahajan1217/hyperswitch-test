@@ -3,25 +3,25 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Confirming — Kindred</title>
+  <title>Order status — Aster & Co.</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="wrap">
-    <div class="brand"><span class="dot"></span><h1>Kindred</h1></div>
+    <div class="brand"><span class="dot"></span><h1>Aster &amp; Co.</h1></div>
 
     <div class="card center" id="card">
       <div class="spinner" id="spinner"></div>
       <h2 id="title">Confirming your payment…</h2>
-      <p class="desc" id="subtitle">Hang tight, this only takes a moment.</p>
-      <div id="mandate-note"></div>
+      <p class="desc" id="subtitle">One moment while we confirm with your bank.</p>
+      <div id="detail"></div>
       <div id="actions"></div>
     </div>
   </div>
 
   <script>
-    // Recover the payment id. Hyperswitch appends it to the return_url, but we
-    // also stored it in sessionStorage as a fallback (e.g. after a 3DS redirect).
+    // Hyperswitch appends the payment id to return_url, but we also stored it
+    // in sessionStorage as a fallback (needed after a 3DS redirect).
     const params = new URLSearchParams(window.location.search);
     const paymentId =
       params.get("payment_id") ||
@@ -31,8 +31,9 @@
     const title = document.getElementById("title");
     const subtitle = document.getElementById("subtitle");
     const spinner = document.getElementById("spinner");
-    const mandateNote = document.getElementById("mandate-note");
+    const detail = document.getElementById("detail");
     const actions = document.getElementById("actions");
+    const money = (c) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
 
     let tries = 0;
     const MAX_TRIES = 15; // ~30s
@@ -42,44 +43,41 @@
       try {
         const r = await fetch("/api/payment/" + encodeURIComponent(paymentId));
         const data = await r.json();
-        if (data.status === "succeeded") return done(true, data.mandateId);
-        if (data.status === "failed") return done(false);
+        if (data.status === "succeeded") return done(true, data);
+        if (data.status === "failed") return done(false, data);
       } catch (e) { /* keep polling */ }
 
       if (tries >= MAX_TRIES) return pending();
       setTimeout(poll, 2000);
     }
 
-    function done(success, mandateId) {
+    function done(success, data) {
       spinner.style.display = "none";
       if (success) {
         spinner.insertAdjacentHTML("afterend", '<div class="tick">✓</div>');
-        title.textContent = "You're subscribed!";
-        subtitle.textContent = "Your first box is on the way. We'll bill you monthly until you cancel.";
-        if (mandateId) {
-          mandateNote.innerHTML = '<p class="fine">Recurring billing set up · mandate <code class="k">' +
-            mandateId + '</code></p>';
-        }
+        title.textContent = "Order confirmed";
+        subtitle.textContent = "Thanks! We've emailed your receipt and your lamp ships within two business days.";
+        const o = data.order;
+        detail.innerHTML = `
+          <div class="summary" style="margin-top:20px;"><span>${o?.product?.name || "Order"}</span><span>${o ? money(o.amount) : ""}</span></div>
+          <p class="fine">Order reference <code class="k">${paymentId}</code></p>`;
+        actions.innerHTML = '<a href="/"><button class="primary">Continue shopping</button></a>';
       } else {
         title.textContent = "Payment didn't go through";
-        subtitle.textContent = "No charge was made. Please try a different card.";
+        subtitle.textContent = "No charge was made. Please try again with a different card.";
         actions.innerHTML = '<a href="/"><button class="primary">Try again</button></a>';
       }
     }
 
     function pending() {
-      title.textContent = "Still processing";
-      subtitle.innerHTML = "We haven't had final confirmation yet. If you're testing locally, " +
-        "check that your webhook tunnel is running and pointed at the backend.";
       spinner.style.display = "none";
+      title.textContent = "Still processing";
+      subtitle.textContent = "We haven't had final confirmation yet. Your order reference is below, and we'll email you as soon as it settles.";
+      detail.innerHTML = `<p class="fine">Reference <code class="k">${paymentId || "unknown"}</code></p>`;
       actions.innerHTML = '<a href="/"><button class="primary">Back to store</button></a>';
     }
 
-    if (!paymentId) {
-      pending();
-    } else {
-      poll();
-    }
+    if (!paymentId) pending(); else poll();
   </script>
 </body>
 </html>

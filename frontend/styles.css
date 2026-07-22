@@ -35,11 +35,11 @@ ul.features { list-style: none; padding: 0; margin: 20px 0; }
 ul.features li { padding: 8px 0 8px 26px; position: relative; color: var(--ink); font-size: 14px; }
 ul.features li::before { content: "✓"; position: absolute; left: 0; color: var(--accent-2); font-weight: 700; }
 label { display: block; font-size: 13px; color: var(--muted); margin: 18px 0 6px; }
-input[type=email] {
+input[type=email], input[type=text] {
   width: 100%; padding: 13px 14px; border-radius: 12px; border: 1px solid var(--border);
   background: #0f1218; color: var(--ink); font-size: 15px; outline: none;
 }
-input[type=email]:focus { border-color: var(--accent); }
+input[type=email]:focus, input[type=text]:focus { border-color: var(--accent); }
 button.primary {
   width: 100%; margin-top: 22px; padding: 14px; border: 0; border-radius: 12px;
   background: linear-gradient(135deg, var(--accent), #4b3fd1); color: #fff;
@@ -65,8 +65,14 @@ button.primary:disabled { opacity: .5; cursor: not-allowed; }
 .tick { width: 64px; height: 64px; margin: 4px auto 18px; border-radius: 50%;
   background: rgba(0,209,178,.12); display: flex; align-items: center; justify-content: center;
   font-size: 30px; color: var(--accent-2); }
-.summary { display: flex; justify-content: space-between; padding: 12px 0;
+.summary { display: flex; justify-content: space-between; padding: 10px 0;
   border-top: 1px solid var(--border); color: var(--muted); font-size: 14px; }
 .summary strong { color: var(--ink); }
+.summary.total { border-top: 1px solid var(--accent); color: var(--ink); font-size: 16px; }
+.totals { margin-top: 22px; }
+.row { display: flex; gap: 10px; }
+.row > div { flex: 1; }
+.hero { display: flex; justify-content: center; color: var(--accent-2);
+  padding: 10px 0 22px; }
 code.k { background: #0f1218; border: 1px solid var(--border); border-radius: 6px;
   padding: 2px 6px; font-size: 12px; color: var(--accent-2); }

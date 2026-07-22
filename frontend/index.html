@@ -3,53 +3,102 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Kindred — The Monthly Box</title>
+  <title>Aster & Co. — Aster Table Lamp</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="wrap">
-    <div class="brand"><span class="dot"></span><h1>Kindred</h1></div>
+    <div class="brand"><span class="dot"></span><h1>Aster &amp; Co.</h1></div>
 
     <div class="card">
-      <p class="eyebrow">Subscription</p>
-      <h2 id="plan-name">The Monthly Box</h2>
-      <p class="desc">A curated box of small-batch goods, delivered to your door every month. Skip or cancel anytime.</p>
+      <div class="hero" aria-hidden="true">
+        <svg viewBox="0 0 120 120" width="96" height="96">
+          <path d="M60 18 L86 58 H34 Z" fill="currentColor" opacity=".85"/>
+          <rect x="56" y="58" width="8" height="34" fill="currentColor" opacity=".6"/>
+          <rect x="40" y="92" width="40" height="7" rx="3.5" fill="currentColor" opacity=".9"/>
+        </svg>
+      </div>
+
+      <p class="eyebrow">Lighting</p>
+      <h2 id="product-name">Aster Table Lamp</h2>
+      <p class="desc" id="product-blurb">Hand-finished oak base with a linen shade.</p>
 
       <ul class="features">
-        <li>5–7 full-size artisan products</li>
-        <li>Free shipping across the US</li>
-        <li>Members-only pricing on refills</li>
+        <li>Solid white oak, hand-rubbed finish</li>
+        <li>Dimmable warm LED bulb included</li>
+        <li>Free US shipping, 30-day returns</li>
       </ul>
 
-      <div class="price" id="price">$24.99 <span>/ month</span></div>
+      <div class="price" id="price">$129.00</div>
 
-      <form id="subscribe-form">
+      <form id="checkout-form">
         <label for="email">Email</label>
-        <input type="email" id="email" name="email" placeholder="you@example.com" required />
-        <button type="submit" class="primary" id="submit-btn">Start subscription</button>
+        <input type="email" id="email" placeholder="you@example.com" required />
+
+        <div class="row">
+          <div>
+            <label for="firstName">First name</label>
+            <input type="text" id="firstName" placeholder="Jane" required />
+          </div>
+          <div>
+            <label for="lastName">Last name</label>
+            <input type="text" id="lastName" placeholder="Doe" required />
+          </div>
+        </div>
+
+        <label for="line1">Shipping address</label>
+        <input type="text" id="line1" placeholder="123 Market St" required />
+        <input type="text" id="line2" placeholder="Apt, suite (optional)" style="margin-top:8px;" />
+
+        <div class="row">
+          <div>
+            <label for="city">City</label>
+            <input type="text" id="city" placeholder="San Francisco" required />
+          </div>
+          <div>
+            <label for="state">State</label>
+            <input type="text" id="state" placeholder="CA" maxlength="2" required />
+          </div>
+          <div>
+            <label for="zip">ZIP</label>
+            <input type="text" id="zip" placeholder="94103" required />
+          </div>
+        </div>
+
+        <div class="totals" id="totals"></div>
+
+        <button type="submit" class="primary" id="submit-btn">Continue to payment</button>
       </form>
 
-      <p class="fine">You'll be charged today and then monthly. By subscribing you authorize
-        Kindred to charge this card on a recurring basis until you cancel. Payments handled
-        securely by Hyperswitch.</p>
+      <p class="fine">Tax is calculated on the server based on your shipping
+        destination. Payments handled securely by Hyperswitch.</p>
 
       <div id="config-warning" class="notice" style="display:none;"></div>
     </div>
   </div>
 
   <script>
-    const form = document.getElementById("subscribe-form");
+    const form = document.getElementById("checkout-form");
     const btn = document.getElementById("submit-btn");
     const warn = document.getElementById("config-warning");
+    const money = (cents, cur) =>
+      (cents / 100).toLocaleString("en-US", { style: "currency", currency: cur });
 
-    // Load plan + check keys are configured.
     fetch("/api/config").then(r => r.json()).then(cfg => {
-      document.getElementById("plan-name").textContent = cfg.plan.name;
-      const dollars = (cfg.plan.amount / 100).toLocaleString("en-US", { style: "currency", currency: cfg.plan.currency });
-      document.getElementById("price").innerHTML = dollars + ' <span>/ month</span>';
+      document.getElementById("product-name").textContent = cfg.product.name;
+      document.getElementById("product-blurb").textContent = cfg.product.blurb;
+      document.getElementById("price").textContent = money(cfg.product.price, cfg.product.currency);
+
+      const p = cfg.pricing;
+      document.getElementById("totals").innerHTML = `
+        <div class="summary"><span>Subtotal</span><span>${money(p.subtotal, p.currency)}</span></div>
+        <div class="summary"><span>Shipping</span><span>${p.shipping === 0 ? "Free" : money(p.shipping, p.currency)}</span></div>
+        <div class="summary"><span>Estimated tax</span><span>${money(p.tax, p.currency)}</span></div>
+        <div class="summary total"><span><strong>Total</strong></span><strong>${money(p.total, p.currency)}</strong></div>`;
+
       if (!cfg.configured) {
         warn.style.display = "block";
-        warn.innerHTML = "Sandbox keys not set. Add them to <code class='k'>backend/.env</code> and restart the server.";
+        warn.innerHTML = "Sandbox keys not set. Add them to <code class='k'>backend/.env</code> and restart.";
       }
     });
 
@@ -57,31 +106,43 @@
       e.preventDefault();
       btn.disabled = true;
       btn.textContent = "Setting up checkout…";
-      const email = document.getElementById("email").value.trim();
+      warn.style.display = "none";
+
+      const payload = {
+        email: document.getElementById("email").value.trim(),
+        shipping: {
+          firstName: document.getElementById("firstName").value.trim(),
+          lastName: document.getElementById("lastName").value.trim(),
+          line1: document.getElementById("line1").value.trim(),
+          line2: document.getElementById("line2").value.trim(),
+          city: document.getElementById("city").value.trim(),
+          state: document.getElementById("state").value.trim().toUpperCase(),
+          zip: document.getElementById("zip").value.trim(),
+        },
+      };
+
       try {
-        const res = await fetch("/api/subscribe", {
+        const res = await fetch("/api/checkout", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
+          body: JSON.stringify(payload),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not start checkout");
-        // Remember the payment id so the return page can poll for final status.
+
         sessionStorage.setItem("hs_payment_id", data.paymentId);
 
         if (data.paymentLinkUrl) {
-          // Hosted mode: hand off to the Hyperswitch-hosted payment page.
-          window.location.href = data.paymentLinkUrl;
+          window.location.href = data.paymentLinkUrl;      // hosted mode
         } else {
-          // Embedded mode: mount Unified Checkout ourselves.
           sessionStorage.setItem("hs_client_secret", data.clientSecret);
-          window.location.href = "/checkout.html";
+          window.location.href = "/checkout.html";          // embedded mode
         }
       } catch (err) {
         warn.style.display = "block";
         warn.textContent = err.message;
         btn.disabled = false;
-        btn.textContent = "Start subscription";
+        btn.textContent = "Continue to payment";
       }
     });
   </script>

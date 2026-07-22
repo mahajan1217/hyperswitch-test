@@ -1,157 +1,129 @@
-# Kindred — subscription box on Juspay Hyperswitch
+# Aster & Co. — retail checkout on Juspay Hyperswitch
 
-A minimal storefront that takes a US subscription-box customer from purchase
-through to a real, completed payment in the Hyperswitch **sandbox**, and sets up
-recurring billing on that first payment.
+A minimal US retail storefront that takes a customer from product page through
+to a real, completed card payment in the Hyperswitch **sandbox**.
 
 ```
 subbox-hyperswitch/
 ├── backend/
 │   ├── server.js        Express app: API + webhook + serves the storefront
 │   ├── hyperswitch.js   REST wrapper (secret key lives here, server-side only)
-│   ├── db.js            JSON-file store: customers, payments, subscriptions
-│   ├── renew.js         Off-session recurring charge (run manually to demo)
+│   ├── db.js            JSON-file store: customers, payments, orders
+│   ├── inspect.js       Diagnostic: dump a raw payment from Hyperswitch
 │   └── .env.example     Copy to .env and add your sandbox keys
-└── frontend/
-    ├── index.html       Storefront + start subscription
-    ├── checkout.html    Unified Checkout (publishable key + client_secret)
-    └── return.html      Polls until the webhook confirms — never trusts the client
+├── frontend/
+│   ├── index.html       Product page + shipping address + order total
+│   ├── checkout.html    Unified Checkout (publishable key + client_secret)
+│   └── return.html      Polls until confirmed — never trusts the client result
+└── render.yaml          One-service deploy config
 ```
 
-## The core flow
+## The flow
 
-1. **Create customer** → stable `customer_id`.
-2. **Mandate-creating first payment** → charges the first box *and* stores the
-   card as a reusable mandate in one step (`setup_future_usage: off_session` +
-   `mandate_data`). This is the key decision: recurring consent is captured on
-   the first payment, not bolted on later.
-3. **3DS handled** → the flow expects `requires_customer_action`/redirect, not
-   just instant success.
-4. **Webhook is the source of truth** → only a `succeeded` webhook activates the
-   subscription. The return page shows "processing" until then.
-5. **Mandate stored** → `renew.js` uses it for the off-session monthly charge.
+1. **Product page** collects email and a US shipping address.
+2. **Server prices the order.** Subtotal, sales tax, shipping and total are all
+   computed server-side. The client never sends an amount.
+3. **Create customer, then payment.** `order_details` and `shipping` go with it
+   so the processor and any downstream risk checks see what was bought.
+4. **Unified Checkout** collects the card in the browser. Card data never
+   touches our server, which keeps the PCI scope minimal.
+5. **3DS handled.** The flow expects a redirect/challenge, not just instant
+   success.
+6. **Webhook is the source of truth.** Only a `succeeded` webhook marks the
+   order paid. The return page shows "processing" until then, with a polling
+   fallback that reconciles if the webhook is delayed.
 
 ## Run it locally
 
 Requires **Node 18+**.
 
 ```bash
-# 1. Install
 cd backend
 npm install
-
-# 2. Configure keys
-cp .env.example .env
-#   then edit .env and paste your sandbox API key + publishable key
-#   (Hyperswitch dashboard → Developers → API Keys)
-
-# 3. Start
-npm start
-#   → http://localhost:4000
+cp .env.example .env      # add your sandbox API key + publishable key
+npm start                 # http://localhost:4000
 ```
 
-### Two setup steps in the Hyperswitch dashboard (easy to miss)
-
-Adding keys is necessary but not sufficient:
+### Two dashboard steps that are easy to miss
 
 1. **Configure a connector in test mode.** A payment has nowhere to route until
-   you add at least one processor under *Connectors*. Use a test/dummy connector
-   or a real one in test mode. If a connector rejects `mandate_data`, try
-   another — not all sandbox connectors support off-session mandates.
-2. **Point the webhook at your backend.** localhost isn't reachable by
-   Hyperswitch, so tunnel it:
+   you add a processor under *Connectors* and enable **Cards** on it.
+2. **Point the webhook at your backend.** Hyperswitch can't reach `localhost`,
+   so tunnel it with `ngrok http 4000`, set the dashboard webhook URL to
+   `https://<tunnel>/webhooks/hyperswitch`, use the same signing secret as
+   `HYPERSWITCH_WEBHOOK_SECRET`, and set `PUBLIC_BASE_URL` to the tunnel URL.
 
-   ```bash
-   ngrok http 4000
-   ```
-
-   Then in the dashboard set the webhook URL to
-   `https://<your-tunnel>/webhooks/hyperswitch` and set the webhook signing
-   secret to the same value as `HYPERSWITCH_WEBHOOK_SECRET` in `.env`. Also set
-   `PUBLIC_BASE_URL` in `.env` to your tunnel URL so `return_url` matches.
-
-   Without this the payment still succeeds, but the return page sits in
-   "processing" because the webhook (your source of truth) never arrives.
+   Without this the payment still succeeds, but the return page relies on the
+   polling fallback rather than the webhook.
 
 ## Test cards
 
-| Path | Card | Notes |
-|------|------|-------|
-| Success (no auth) | `4242 4242 4242 4242` | Clears immediately |
-| 3DS challenge | `4000 0000 0000 3220` | Triggers the challenge screen |
+| Path | Card |
+|------|------|
+| Success | `4242 4242 4242 4242` |
+| 3DS challenge | `4000 0000 0000 3220` |
 
-Any future expiry (e.g. `12/34`), any 3-digit CVC.
-
-## Verify it worked
-
-The check that matters is a populated `mandate_id`, which proves the first
-payment set up recurring billing, not just a one-time charge. State is written
-to `backend/store.json`:
-
-```bash
-cd backend
-cat store.json | python3 -m json.tool   # look at subscriptions[].mandate_id
-```
-
-## Demo the recurring charge
-
-```bash
-cd backend
-node renew.js <customer_id>   # off-session MIT using the stored mandate
-```
+Any future expiry, any 3-digit CVC.
 
 ## Integration modes
 
-Set `CHECKOUT_MODE` in the environment:
+`CHECKOUT_MODE` switches how the card is collected:
 
-| Mode | How it works | Tradeoff |
-|------|--------------|----------|
-| `embedded` (default) | We mount the Unified Checkout SDK with the `client_secret` | Carries `mandate_data` through to confirm, so it produces a real **off-session mandate**. Needs the SDK to load, which fails on `localhost`. |
-| `hosted` | Redirect to a Hyperswitch payment link | Robust, no SDK embedding. But the hosted confirm step drops `mandate_data`, downgrading `setup_future_usage` to `on_session`, so **no mandate is created**. |
+| Mode | How | When to use |
+|------|-----|-------------|
+| `embedded` (default) | We mount Unified Checkout with the `client_secret` | Full control of checkout UI and branding |
+| `hosted` | Redirect to a Hyperswitch payment link | Fallback if the SDK can't run in an environment |
 
-This tradeoff was found the hard way: a hosted-mode payment succeeded but came
-back with `setup_future_usage: "on_session"`, `mandate_data: null`, and
-`is_eligible_for_mit_payment: false`. The card was saved, but not billable
-off-session. The server now logs a warning whenever `setup_future_usage` comes
-back as anything other than `off_session`.
+The SDK does not render on `localhost` (a `403` on its locale asset and a failed
+wallet manifest fetch), so `hosted` is the practical mode for local testing and
+`embedded` for the deployed site.
 
 ## Deploy
 
-The app is a single Express service that also serves the storefront, so one
-deploy covers everything.
+Single Express service, serves the frontend too.
 
-**Render (config included as `render.yaml`):**
+1. Push to GitHub.
+2. Render → New → Blueprint → pick the repo. It reads `render.yaml`.
+3. Set secrets in the Render dashboard: `HYPERSWITCH_API_KEY`,
+   `HYPERSWITCH_PUBLISHABLE_KEY`, `HYPERSWITCH_WEBHOOK_SECRET`.
+4. After the first deploy, set `PUBLIC_BASE_URL` to the live URL and redeploy.
+5. Point the Hyperswitch webhook at `https://<your-app>/webhooks/hyperswitch`.
 
-1. Push this folder to a GitHub repo.
-2. In Render, New → Blueprint, point it at the repo. It reads `render.yaml`.
-3. Set the secret env vars in the Render dashboard: `HYPERSWITCH_API_KEY`,
-   `HYPERSWITCH_PUBLISHABLE_KEY`, `HYPERSWITCH_WEBHOOK_SECRET`, and optionally
-   `HYPERSWITCH_PROFILE_ID`.
-4. After the first deploy, set `PUBLIC_BASE_URL` to your live URL
-   (e.g. `https://subbox-hyperswitch.onrender.com`) and redeploy so `return_url`
-   is correct.
-5. In the Hyperswitch dashboard, point the webhook at
-   `https://<your-app>/webhooks/hyperswitch` with the same signing secret.
-
-Once deployed, ngrok is no longer needed. The webhook reaches you directly.
-
-Note: `store.json` lives on the container filesystem and resets on redeploy.
-Fine for a prototype; use Postgres for anything real.
-
-### Why deploying matters here
-
-The embedded SDK fails on `localhost` (a `403` on the SDK's locale asset and a
-failed wallet manifest fetch). Both are typically localhost-only problems. On a
-real HTTPS domain, `embedded` mode is expected to work, which is the path that
-actually produces the off-session mandate.
+`store.json` lives on the container filesystem and resets on redeploy. Fine for
+a prototype; use Postgres for anything real.
 
 ## Built vs deferred
 
-**Built:** customer create, mandate-creating first payment, 3DS handling,
-signed idempotent webhooks, persistence, poll fallback, and a runnable
-off-session renewal script.
+**Built:** product page, server-side order pricing with US sales tax, shipping
+address capture, customer + payment creation, Unified Checkout, 3DS handling,
+signed idempotent webhooks, idempotency keys on payment creation, a polling
+reconciliation fallback, and order state persistence.
 
-**Deferred (with rationale in the decisions doc):** dunning/retry on failed
-renewals, smart routing across multiple processors, refunds/cancellations UI,
-extra payment methods (Apple/Google Pay, ACH), and proration/plan changes.
-# hyperswitch-test
+**Deferred, with reasoning:**
+
+- **Refunds and cancellations.** The API call is implemented in
+  `hyperswitch.js` but not exposed in a UI. Retail needs this, but early volume
+  is low enough to handle from the Hyperswitch dashboard.
+- **Auth now, capture on fulfilment.** This prototype captures automatically
+  because the item ships immediately. For backordered or made-to-order goods
+  you'd use `capture_method: "manual"` and capture at shipment, which also
+  avoids refund fees on cancellations.
+- **Wallets (Apple Pay / Google Pay).** Meaningful conversion lift in US
+  retail, but they need domain registration and a reachable merchant manifest,
+  so they're a deployment-gated task rather than a code one.
+- **Real tax calculation.** Flat rate here. US sales tax is destination-based
+  and varies by state and locality, so production would call Avalara or TaxJar.
+- **Smart routing across processors.** Hyperswitch's core strength, but
+  pointless with one connector and no volume. It becomes valuable once there's
+  enough traffic to measure per-processor auth rates and cost.
+- **Inventory holds, address validation, saved cards for repeat buyers.**
+  Standard retail concerns, all out of scope for a single-product prototype.
+
+## Note on connectors
+
+Sandbox connector capability varies more than the API surface suggests. The
+dummy connectors process payments but don't implement the full mandate/stored
+credential lifecycle, and the real Stripe connector rejects raw card data
+server-side unless the account has been granted access (which requires PCI DSS
+SAQ D). Worth verifying connector capability early rather than assuming the API
+accepting a field means the processor honors it.

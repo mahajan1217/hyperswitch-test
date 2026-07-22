@@ -3,25 +3,25 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Checkout — Kindred</title>
+  <title>Checkout — Aster & Co.</title>
   <link rel="stylesheet" href="/styles.css" />
   <!-- Hyperswitch web SDK (HyperLoader) -->
   <script src="https://beta.hyperswitch.io/v1/HyperLoader.js"></script>
 </head>
 <body>
   <div class="wrap">
-    <div class="brand"><span class="dot"></span><h1>Kindred</h1></div>
-    <a class="back" href="/">← Back</a>
+    <div class="brand"><span class="dot"></span><h1>Aster &amp; Co.</h1></div>
+    <a class="back" href="/">← Back to store</a>
 
     <div class="card">
       <p class="eyebrow">Checkout</p>
-      <h2>Confirm your subscription</h2>
+      <h2>Complete your order</h2>
 
-      <div class="summary"><span>The Monthly Box</span><strong id="amount">$24.99 / mo</strong></div>
+      <div id="order-summary"></div>
 
       <form id="payment-form">
         <div id="unified-checkout"><!-- Unified Checkout mounts here --></div>
-        <button id="pay-btn" class="primary" type="submit">Pay &amp; subscribe</button>
+        <button id="pay-btn" class="primary" type="submit">Pay now</button>
       </form>
 
       <div id="error" class="notice" style="display:none;"></div>
@@ -34,17 +34,20 @@
     const clientSecret = sessionStorage.getItem("hs_client_secret");
     const errorBox = document.getElementById("error");
     const payBtn = document.getElementById("pay-btn");
+    const money = (c, cur) => (c / 100).toLocaleString("en-US", { style: "currency", currency: cur });
 
-    if (!clientSecret) {
-      window.location.href = "/";
-    }
+    if (!clientSecret) window.location.href = "/";
 
     let hyper, widgets;
 
     async function init() {
       const cfg = await fetch("/api/config").then(r => r.json());
-      const dollars = (cfg.plan.amount / 100).toLocaleString("en-US", { style: "currency", currency: cfg.plan.currency });
-      document.getElementById("amount").textContent = dollars + " / mo";
+      const p = cfg.pricing;
+      document.getElementById("order-summary").innerHTML = `
+        <div class="summary"><span>${cfg.product.name}</span><span>${money(p.subtotal, p.currency)}</span></div>
+        <div class="summary"><span>Shipping</span><span>${p.shipping === 0 ? "Free" : money(p.shipping, p.currency)}</span></div>
+        <div class="summary"><span>Tax</span><span>${money(p.tax, p.currency)}</span></div>
+        <div class="summary total"><strong>Total</strong><strong>${money(p.total, p.currency)}</strong></div>`;
 
       if (!cfg.publishableKey || cfg.publishableKey.includes("replace_me")) {
         throw new Error("Publishable key not set in backend/.env");
@@ -53,21 +56,21 @@
       // Initialize the SDK with the PUBLISHABLE key (safe for the browser).
       hyper = Hyper(cfg.publishableKey);
       widgets = hyper.widgets({ clientSecret, appearance: { theme: "midnight" } });
-      // walletReturnUrl is REQUIRED whenever any wallet method is available
-      // (PayPal counts as a wallet). The SDK throws an INTEGRATION ERROR
-      // without it, even if you think you've turned wallets off.
+
+      // Card-only for this prototype. walletReturnUrl is REQUIRED whenever any
+      // wallet method is available, or the SDK throws an INTEGRATION ERROR.
+      // Wallets are a deferred flow (see README) since they need domain
+      // registration and a reachable merchant manifest.
       const unifiedCheckout = widgets.create("payment", {
         layout: "tabs",
         wallets: {
           walletReturnUrl: window.location.origin + "/return.html",
           applePay: "never",
           googlePay: "never",
-          payPal: "never", // card-only prototype; PayPal can't do card MIT
+          payPal: "never",
         },
-        fields: { billingDetails: "never" },
       });
 
-      // Surface an async mount failure instead of the SDK's generic screen.
       unifiedCheckout.on?.("loaderror", (ev) => {
         console.error("[unified-checkout] loaderror", ev);
         errorBox.style.display = "block";
@@ -83,22 +86,19 @@
       payBtn.textContent = "Processing…";
       errorBox.style.display = "none";
 
-      // Confirm the payment. The customer may be redirected to a 3DS challenge
-      // and returned to return.html. We NEVER treat a client result as final.
+      // The customer may be redirected to a 3DS challenge and returned to
+      // return.html. We NEVER treat the client-side result as final.
       const { error } = await hyper.confirmPayment({
         widgets,
-        confirmParams: {
-          return_url: window.location.origin + "/return.html",
-        },
+        confirmParams: { return_url: window.location.origin + "/return.html" },
         redirect: "always",
       });
 
-      // We only get here if confirmPayment returned before redirecting (an error).
       if (error) {
         errorBox.style.display = "block";
         errorBox.textContent = error.message || "Payment could not be completed.";
         payBtn.disabled = false;
-        payBtn.textContent = "Pay & subscribe";
+        payBtn.textContent = "Pay now";
       }
     });
 

@@ -5,17 +5,6 @@ import crypto from "crypto";
 const BASE_URL = process.env.HYPERSWITCH_BASE_URL || "https://sandbox.hyperswitch.io";
 const API_KEY = process.env.HYPERSWITCH_API_KEY;
 
-// Hyperswitch expects ISO 8601 without milliseconds, e.g. 2026-07-22T05:40:08Z
-function isoSeconds(d) {
-  return d.toISOString().replace(/\.\d{3}Z$/, "Z");
-}
-
-function yearsFromNow(n) {
-  const d = new Date();
-  d.setFullYear(d.getFullYear() + n);
-  return d;
-}
-
 async function hsFetch(path, { method = "POST", body, idempotencyKey } = {}) {
   if (!API_KEY || API_KEY.includes("replace_me")) {
     throw new Error(
@@ -52,28 +41,31 @@ async function hsFetch(path, { method = "POST", body, idempotencyKey } = {}) {
   return data;
 }
 
-// Create a customer so saved payment methods / future charges have a stable id.
+// Create a customer so orders and receipts have a stable id to hang off.
 export function createCustomer({ email }) {
   return hsFetch("/customers", {
     body: {
       email,
-      description: "Subscription box customer",
+      description: "Retail customer",
     },
   });
 }
 
-// The core call. This is a mandate-creating first payment: it charges the first
-// box AND stores the card as a reusable mandate, in one step. That consent
-// (setup_future_usage + mandate_data) has to be on the first payment, or there
-// is no network-valid way to bill month two.
+// One-time payment for a physical-goods order.
+//
 // `usePaymentLink` selects the integration mode:
-//   false (embedded) -> return client_secret, mount Unified Checkout ourselves.
-//                       Carries mandate_data through to confirm, so this is the
-//                       mode that actually produces an off-session mandate.
-//   true  (hosted)   -> Hyperswitch-hosted page. Robust to SDK/CDN issues, but
-//                       its own confirm step drops our mandate_data, which
-//                       downgrades setup_future_usage to on_session.
-export function createFirstPayment({
+//   false (embedded) -> return client_secret, we mount Unified Checkout.
+//   true  (hosted)   -> Hyperswitch-hosted page, we redirect to payment_link.link.
+//
+// Notes on the retail-specific choices here:
+//  - capture_method "automatic": the order ships immediately, so there's no
+//    reason to hold an authorization. Auth-now/capture-on-fulfilment is the
+//    right call for made-to-order or backordered goods (see README).
+//  - authentication_type "three_ds": lets the issuer challenge. US cards often
+//    won't, but the flow must handle it rather than assume instant success.
+//  - order_details + shipping are sent so the processor and any downstream
+//    risk/fraud checks see what was actually bought and where it's going.
+export function createOrderPayment({
   amount,
   currency,
   customerId,
@@ -81,56 +73,45 @@ export function createFirstPayment({
   idempotencyKey,
   profileId,
   usePaymentLink = false,
-  customerIp,
-  userAgent,
+  product,
+  shipping,
+  email,
 }) {
   return hsFetch("/payments", {
     idempotencyKey,
     body: {
-      amount, // minor units, e.g. 2499 = $24.99
+      amount, // minor units, total incl. tax
       currency, // "USD"
       customer_id: customerId,
+      email,
       confirm: false, // confirmed client-side (embedded) or on the hosted page
+      capture_method: "automatic",
+      authentication_type: "three_ds",
+      return_url: returnUrl,
+      description: product ? `Order: ${product.name}` : "Retail order",
       ...(profileId ? { profile_id: profileId } : {}),
       ...(usePaymentLink
         ? {
             payment_link: true,
             payment_link_config: {
-              seller_name: "Kindred",
+              seller_name: "Aster & Co.",
               sdk_layout: "accordion",
               show_card_form_by_default: true,
             },
           }
         : {}),
-      capture_method: "automatic",
-      authentication_type: "three_ds", // let the issuer challenge if it wants
-      setup_future_usage: "off_session", // we will charge again with no customer present
-      return_url: returnUrl,
-      // Ask the network for permission to charge this card on a recurring basis.
-      // multi_use needs an explicit validity window (start_date/end_date). Without
-      // it the mandate can be rejected, which shows up as mandate_data: null and
-      // setup_future_usage silently downgraded to on_session.
-      mandate_data: {
-        customer_acceptance: {
-          acceptance_type: "online",
-          accepted_at: isoSeconds(new Date()),
-          // ip_address is REQUIRED by some connectors (Stripe rejects with
-          // IR_04 without it). It's also the audit trail proving the customer
-          // consented to recurring billing, so it belongs here regardless.
-          online: {
-            ip_address: customerIp || "0.0.0.0",
-            user_agent: userAgent || "subbox-prototype",
-          },
-        },
-        mandate_type: {
-          multi_use: {
-            amount,
-            currency,
-            start_date: isoSeconds(new Date()),
-            end_date: isoSeconds(yearsFromNow(3)), // subscription runs until canceled
-          },
-        },
-      },
+      ...(product
+        ? {
+            order_details: [
+              {
+                product_name: product.name,
+                quantity: 1,
+                amount: product.price,
+              },
+            ],
+          }
+        : {}),
+      ...(shipping ? { shipping } : {}),
     },
   });
 }
@@ -140,21 +121,15 @@ export function retrievePayment(paymentId) {
   return hsFetch(`/payments/${paymentId}?force_sync=true`, { method: "GET" });
 }
 
-// Merchant-initiated (off-session) recurring charge for renewals. No UI, no
-// customer present. References the stored mandate. Used by the renewal job.
-export function chargeRecurring({ amount, currency, customerId, mandateId, idempotencyKey }) {
-  return hsFetch("/payments", {
+// Refunds. Not wired into a UI in this prototype, but the call is here because
+// refunds are table stakes for retail and it's a one-liner to expose.
+export function refundPayment({ paymentId, amount, reason, idempotencyKey }) {
+  return hsFetch("/refunds", {
     idempotencyKey,
     body: {
-      amount,
-      currency,
-      customer_id: customerId,
-      confirm: true,
-      off_session: true,
-      recurring_details: {
-        type: "mandate_id",
-        data: mandateId,
-      },
+      payment_id: paymentId,
+      ...(amount ? { amount } : {}), // omit for a full refund
+      reason: reason || "requested_by_customer",
     },
   });
 }

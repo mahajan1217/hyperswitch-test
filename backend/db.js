@@ -1,7 +1,7 @@
 // Tiny persistent store backed by a JSON file. Zero dependencies (no native
 // build), works on any Node 18+. The point isn't the storage engine: it's that
-// state (customer_id, mandate_id, status) survives a restart, so the recurring
-// charge for month two has something to reference. Swap for Postgres in prod.
+// order state survives a restart, so a webhook arriving after a crash still
+// finds the order it belongs to. Swap for Postgres in production.
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { readFileSync, writeFileSync, existsSync } from "fs";
@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FILE = join(__dirname, "store.json");
 
-const empty = { customers: {}, payments: {}, subscriptions: {} };
+const empty = { customers: {}, payments: {}, orders: {} };
 
 function load() {
   if (!existsSync(FILE)) return structuredClone(empty);
@@ -35,7 +35,7 @@ export function upsertCustomer(customerId, email) {
   save();
 }
 
-export function upsertPayment({ paymentId, customerId, status, amount, currency, mandateId }) {
+export function upsertPayment({ paymentId, customerId, status, amount, currency }) {
   const prev = data.payments[paymentId] || {};
   data.payments[paymentId] = {
     payment_id: paymentId,
@@ -43,8 +43,6 @@ export function upsertPayment({ paymentId, customerId, status, amount, currency,
     status,
     amount: amount ?? prev.amount,
     currency: currency ?? prev.currency,
-    // Never clobber a real mandate_id with null on a later update.
-    mandate_id: mandateId ?? prev.mandate_id ?? null,
     updated_at: new Date().toISOString(),
   };
   save();
@@ -54,33 +52,42 @@ export function getPayment(paymentId) {
   return data.payments[paymentId] || null;
 }
 
-export function activateSubscription(customerId, mandateId, plan = "monthly-box") {
-  const prev = data.subscriptions[customerId] || {};
-  data.subscriptions[customerId] = {
+// Orders are keyed by payment_id: one payment, one order, for this prototype.
+export function createOrder({ paymentId, customerId, email, product, amount, shipping }) {
+  data.orders[paymentId] = {
+    payment_id: paymentId,
     customer_id: customerId,
-    status: "active",
-    mandate_id: mandateId ?? prev.mandate_id ?? null,
-    plan,
+    email,
+    product,
+    amount,
+    shipping: shipping || null,
+    status: "pending_payment",
+    created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
   save();
 }
 
-export function setSubscriptionPending(customerId, plan = "monthly-box") {
-  const prev = data.subscriptions[customerId];
-  if (prev?.status === "active") return; // don't downgrade an active sub
-  data.subscriptions[customerId] = {
-    customer_id: customerId,
-    status: "pending",
-    mandate_id: prev?.mandate_id ?? null,
-    plan,
-    updated_at: new Date().toISOString(),
-  };
+export function markOrderPaid(paymentId) {
+  const o = data.orders[paymentId];
+  if (!o) return null;
+  o.status = "paid";
+  o.updated_at = new Date().toISOString();
   save();
+  return o;
 }
 
-export function getSubscription(customerId) {
-  return data.subscriptions[customerId] || null;
+export function markOrderFailed(paymentId) {
+  const o = data.orders[paymentId];
+  if (!o) return null;
+  o.status = "payment_failed";
+  o.updated_at = new Date().toISOString();
+  save();
+  return o;
+}
+
+export function getOrder(paymentId) {
+  return data.orders[paymentId] || null;
 }
 
 export default { load, save };
