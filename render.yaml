@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: subbox-hyperswitch
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/config
+    envVars:
+      # Secrets are set in the Render dashboard, never committed.
+      - key: HYPERSWITCH_API_KEY
+        sync: false
+      - key: HYPERSWITCH_PUBLISHABLE_KEY
+        sync: false
+      - key: HYPERSWITCH_WEBHOOK_SECRET
+        sync: false
+      - key: HYPERSWITCH_PROFILE_ID
+        sync: false
+      # Set this to your live Render URL after the first deploy, e.g.
+      # https://subbox-hyperswitch.onrender.com
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: HYPERSWITCH_BASE_URL
+        value: https://sandbox.hyperswitch.io
+      # "embedded" preserves the off-session mandate. Switch to "hosted" if the
+      # SDK misbehaves on the live domain.
+      - key: CHECKOUT_MODE
+        value: embedded
+      - key: NODE_VERSION
+        value: "20"

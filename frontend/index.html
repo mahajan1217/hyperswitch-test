@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kindred — The Monthly Box</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span><h1>Kindred</h1></div>
+
+    <div class="card">
+      <p class="eyebrow">Subscription</p>
+      <h2 id="plan-name">The Monthly Box</h2>
+      <p class="desc">A curated box of small-batch goods, delivered to your door every month. Skip or cancel anytime.</p>
+
+      <ul class="features">
+        <li>5–7 full-size artisan products</li>
+        <li>Free shipping across the US</li>
+        <li>Members-only pricing on refills</li>
+      </ul>
+
+      <div class="price" id="price">$24.99 <span>/ month</span></div>
+
+      <form id="subscribe-form">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" placeholder="you@example.com" required />
+        <button type="submit" class="primary" id="submit-btn">Start subscription</button>
+      </form>
+
+      <p class="fine">You'll be charged today and then monthly. By subscribing you authorize
+        Kindred to charge this card on a recurring basis until you cancel. Payments handled
+        securely by Hyperswitch.</p>
+
+      <div id="config-warning" class="notice" style="display:none;"></div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("subscribe-form");
+    const btn = document.getElementById("submit-btn");
+    const warn = document.getElementById("config-warning");
+
+    // Load plan + check keys are configured.
+    fetch("/api/config").then(r => r.json()).then(cfg => {
+      document.getElementById("plan-name").textContent = cfg.plan.name;
+      const dollars = (cfg.plan.amount / 100).toLocaleString("en-US", { style: "currency", currency: cfg.plan.currency });
+      document.getElementById("price").innerHTML = dollars + ' <span>/ month</span>';
+      if (!cfg.configured) {
+        warn.style.display = "block";
+        warn.innerHTML = "Sandbox keys not set. Add them to <code class='k'>backend/.env</code> and restart the server.";
+      }
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      btn.disabled = true;
+      btn.textContent = "Setting up checkout…";
+      const email = document.getElementById("email").value.trim();
+      try {
+        const res = await fetch("/api/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not start checkout");
+        // Remember the payment id so the return page can poll for final status.
+        sessionStorage.setItem("hs_payment_id", data.paymentId);
+
+        if (data.paymentLinkUrl) {
+          // Hosted mode: hand off to the Hyperswitch-hosted payment page.
+          window.location.href = data.paymentLinkUrl;
+        } else {
+          // Embedded mode: mount Unified Checkout ourselves.
+          sessionStorage.setItem("hs_client_secret", data.clientSecret);
+          window.location.href = "/checkout.html";
+        }
+      } catch (err) {
+        warn.style.display = "block";
+        warn.textContent = err.message;
+        btn.disabled = false;
+        btn.textContent = "Start subscription";
+      }
+    });
+  </script>
+</body>
+</html>

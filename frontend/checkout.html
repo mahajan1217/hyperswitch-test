@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Checkout — Kindred</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <!-- Hyperswitch web SDK (HyperLoader) -->
+  <script src="https://beta.hyperswitch.io/v1/HyperLoader.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span><h1>Kindred</h1></div>
+    <a class="back" href="/">← Back</a>
+
+    <div class="card">
+      <p class="eyebrow">Checkout</p>
+      <h2>Confirm your subscription</h2>
+
+      <div class="summary"><span>The Monthly Box</span><strong id="amount">$24.99 / mo</strong></div>
+
+      <form id="payment-form">
+        <div id="unified-checkout"><!-- Unified Checkout mounts here --></div>
+        <button id="pay-btn" class="primary" type="submit">Pay &amp; subscribe</button>
+      </form>
+
+      <div id="error" class="notice" style="display:none;"></div>
+      <p class="fine">Test success card <code class="k">4242 4242 4242 4242</code> ·
+        3DS card <code class="k">4000 0000 0000 3220</code> · any future expiry, any CVC.</p>
+    </div>
+  </div>
+
+  <script>
+    const clientSecret = sessionStorage.getItem("hs_client_secret");
+    const errorBox = document.getElementById("error");
+    const payBtn = document.getElementById("pay-btn");
+
+    if (!clientSecret) {
+      window.location.href = "/";
+    }
+
+    let hyper, widgets;
+
+    async function init() {
+      const cfg = await fetch("/api/config").then(r => r.json());
+      const dollars = (cfg.plan.amount / 100).toLocaleString("en-US", { style: "currency", currency: cfg.plan.currency });
+      document.getElementById("amount").textContent = dollars + " / mo";
+
+      if (!cfg.publishableKey || cfg.publishableKey.includes("replace_me")) {
+        throw new Error("Publishable key not set in backend/.env");
+      }
+
+      // Initialize the SDK with the PUBLISHABLE key (safe for the browser).
+      hyper = Hyper(cfg.publishableKey);
+      widgets = hyper.widgets({ clientSecret, appearance: { theme: "midnight" } });
+      const unifiedCheckout = widgets.create("payment", { layout: "tabs", wallets: { applePay: "never", googlePay: "never" }, fields: { billingDetails: "never" }, });
+
+      // Surface an async mount failure instead of the SDK's generic screen.
+      unifiedCheckout.on?.("loaderror", (ev) => {
+        console.error("[unified-checkout] loaderror", ev);
+        errorBox.style.display = "block";
+        errorBox.textContent = "Checkout failed to load: " + (ev?.error?.message || JSON.stringify(ev));
+      });
+
+      unifiedCheckout.mount("#unified-checkout");
+    }
+
+    document.getElementById("payment-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      payBtn.disabled = true;
+      payBtn.textContent = "Processing…";
+      errorBox.style.display = "none";
+
+      // Confirm the payment. The customer may be redirected to a 3DS challenge
+      // and returned to return.html. We NEVER treat a client result as final.
+      const { error } = await hyper.confirmPayment({
+        widgets,
+        confirmParams: {
+          return_url: window.location.origin + "/return.html",
+        },
+        redirect: "always",
+      });
+
+      // We only get here if confirmPayment returned before redirecting (an error).
+      if (error) {
+        errorBox.style.display = "block";
+        errorBox.textContent = error.message || "Payment could not be completed.";
+        payBtn.disabled = false;
+        payBtn.textContent = "Pay & subscribe";
+      }
+    });
+
+    init().catch(err => {
+      errorBox.style.display = "block";
+      errorBox.textContent = err.message;
+    });
+  </script>
+</body>
+</html>
