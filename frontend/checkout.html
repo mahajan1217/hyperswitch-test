@@ -53,7 +53,19 @@
       // Initialize the SDK with the PUBLISHABLE key (safe for the browser).
       hyper = Hyper(cfg.publishableKey);
       widgets = hyper.widgets({ clientSecret, appearance: { theme: "midnight" } });
-      const unifiedCheckout = widgets.create("payment", { layout: "tabs", wallets: { applePay: "never", googlePay: "never" }, fields: { billingDetails: "never" }, });
+      // walletReturnUrl is REQUIRED whenever any wallet method is available
+      // (PayPal counts as a wallet). The SDK throws an INTEGRATION ERROR
+      // without it, even if you think you've turned wallets off.
+      const unifiedCheckout = widgets.create("payment", {
+        layout: "tabs",
+        wallets: {
+          walletReturnUrl: window.location.origin + "/return.html",
+          applePay: "never",
+          googlePay: "never",
+          payPal: "never", // card-only prototype; PayPal can't do card MIT
+        },
+        fields: { billingDetails: "never" },
+      });
 
       // Surface an async mount failure instead of the SDK's generic screen.
       unifiedCheckout.on?.("loaderror", (ev) => {
