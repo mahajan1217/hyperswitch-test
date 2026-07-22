@@ -13,9 +13,9 @@ import {
   upsertCustomer,
   upsertPayment,
   getPayment,
-  activateSubscription,
   setSubscriptionPending,
 } from "./db.js";
+import { applyPaymentOutcome, extractMandateId, extractPaymentFacts } from "./mandate.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -62,29 +62,15 @@ app.post("/webhooks/hyperswitch", express.raw({ type: "*/*" }), (req, res) => {
 function handleWebhookEvent(event) {
   const type = event.event_type || event.type;
   const payment = event.content?.object || event.content?.payment || event.data || {};
-  const paymentId = payment.payment_id || payment.id;
-  const status = payment.status;
-  const customerId = payment.customer_id;
-  const mandateId = payment.mandate_id || payment.connector_mandate_id || null;
 
-  console.log(`[webhook] ${type} payment=${paymentId} status=${status} mandate=${mandateId}`);
+  console.log(
+    `[webhook] ${type} payment=${payment.payment_id || payment.id} ` +
+      `status=${payment.status} mandate=${extractMandateId(payment)}`
+  );
 
-  if (!paymentId) return;
-
-  upsertPayment({
-    paymentId,
-    customerId,
-    status,
-    amount: payment.amount,
-    currency: payment.currency,
-    mandateId,
-  });
-
-  // Webhook is the source of truth. Only a succeeded payment activates the sub.
-  if (status === "succeeded" && customerId) {
-    activateSubscription(customerId, mandateId, PLAN.name);
-    console.log(`[webhook] subscription activated for ${customerId} (mandate ${mandateId})`);
-  }
+  // Parsing and state-writing live in mandate.js so this path and the poll
+  // fallback can never disagree about whether a mandate was captured.
+  applyPaymentOutcome(payment, { source: "webhook", planName: PLAN.name });
 }
 
 // JSON parser for the rest of the API.
@@ -193,29 +179,54 @@ app.get("/api/payment/:id", async (req, res) => {
   try {
     // Prefer our own store (updated by webhook); fall back to a live sync.
     let record = getPayment(paymentId);
-    if (!record || (record.status !== "succeeded" && record.status !== "failed")) {
+
+    const isTerminal = record?.status === "succeeded" || record?.status === "failed";
+    // Re-sync when the status isn't final yet, but ALSO when it is final and we
+    // still have no mandate. Without that second condition a payment that
+    // reached "succeeded" with a missing mandate could never self-heal, because
+    // we'd stop asking Hyperswitch the moment the status went terminal.
+    const missingMandate = !record?.mandate_id;
+
+    if (!record || !isTerminal || missingMandate) {
       const live = await retrievePayment(paymentId);
-      upsertPayment({
-        paymentId: live.payment_id,
-        customerId: live.customer_id,
-        status: live.status,
-        amount: live.amount,
-        currency: live.currency,
-        mandateId: live.mandate_id || live.connector_mandate_id || null,
-      });
-      if (live.status === "succeeded" && live.customer_id) {
-        activateSubscription(live.customer_id, live.mandate_id, PLAN.name);
-      }
+      // Same parsing and same write path as the webhook, including activation.
+      // Previously this passed live.mandate_id straight to activateSubscription
+      // while storing the connector_mandate_id fallback, so a connector that
+      // returned connector_mandate_id activated the sub with mandate_id: null.
+      applyPaymentOutcome(live, { source: "poll", planName: PLAN.name });
       record = getPayment(paymentId);
     }
+
     res.json({
       paymentId,
       status: record?.status || "unknown",
       mandateId: record?.mandate_id || null,
+      // Lets the caller tell "paid" apart from "paid and actually billable".
+      mandateCaptured: Boolean(record?.mandate_id),
     });
   } catch (e) {
     console.error("[payment status] error", e.message);
     res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// Debug-only: the raw truth. Shows exactly what Hyperswitch returns, what we
+// stored, and what our extractor detected — so you can find which field
+// actually carries the mandate for a given connector instead of guessing.
+// Enable with DEBUG_ENDPOINTS=true; leave off anywhere real (exposes payloads).
+app.get("/api/payment/:id/raw", async (req, res) => {
+  if (process.env.DEBUG_ENDPOINTS !== "true") {
+    return res.status(404).json({ error: "not found" });
+  }
+  try {
+    const live = await retrievePayment(req.params.id);
+    res.json({
+      stored: getPayment(req.params.id),
+      detected: extractPaymentFacts(live),
+      raw: live,
+    });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message, details: e.body });
   }
 });
 
